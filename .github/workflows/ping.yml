@@ -1,0 +1,33 @@
+name: watchdog ping
+
+# Reliable, computer-off trigger for the wa-hub trader-watchdog self-heal. Public repo = free unlimited
+# Actions. The target URL lives in the encrypted WATCHDOG_URL secret, so nothing sensitive is in code.
+# The worker does the actual healing (restart Fly bot if frozen, warm stale data) with its own secrets;
+# this job only fails (-> GitHub emails you) if the worker is unreachable.
+
+on:
+  schedule:
+    - cron: '*/15 12-22 * * 1-5'   # every 15 min, US pre-open -> after-close, Mon-Fri (UTC)
+  workflow_dispatch: {}
+
+concurrency:
+  group: watchdog-ping
+  cancel-in-progress: false
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Trigger watchdog self-heal
+        env:
+          WATCHDOG_URL: ${{ secrets.WATCHDOG_URL }}
+        run: |
+          set -uo pipefail
+          if [ -z "${WATCHDOG_URL:-}" ]; then echo "::error::WATCHDOG_URL secret not set"; exit 1; fi
+          out=$(curl -sS -m 90 --retry 2 --retry-delay 5 "${WATCHDOG_URL}/?run=1") || { echo "::error::watchdog unreachable"; exit 1; }
+          echo "watchdog: $out"
+          echo "$out" | grep -q "watchdog:" || { echo "::error::watchdog returned no summary"; exit 1; }
+          case "$out" in
+            *"restart FAIL"*|*"restartov"*) echo "::warning::watchdog took remediation action - check email" ;;
+          esac
